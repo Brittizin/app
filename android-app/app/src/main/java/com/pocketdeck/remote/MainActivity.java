@@ -1,6 +1,7 @@
 package com.pocketdeck.remote;
 
 import android.annotation.SuppressLint;
+import android.app.Activity;
 import android.content.DialogInterface;
 import android.content.Intent;
 import android.content.SharedPreferences;
@@ -11,6 +12,7 @@ import android.text.InputType;
 import android.view.View;
 import android.view.WindowManager;
 import android.webkit.WebChromeClient;
+import android.webkit.ValueCallback;
 import android.webkit.WebResourceError;
 import android.webkit.WebResourceRequest;
 import android.webkit.WebSettings;
@@ -28,16 +30,14 @@ public class MainActivity extends AppCompatActivity {
     private static final String PREFS = "pocket_deck_prefs";
     private static final String KEY_REMOTE_URL = "remote_url";
     private static final String DEFAULT_REMOTE_URL = "http://192.168.3.9:3939/?mode=remote";
+    private static final int FILE_CHOOSER_REQUEST_CODE = 1001;
 
     private WebView webView;
     private View errorCard;
     private TextView errorText;
     private Button retryButton;
     private Button configButton;
-    private Button topConfigButton;
-    private Button prevPageButton;
-    private Button nextPageButton;
-    private TextView titleText;
+    private ValueCallback<Uri[]> filePathCallback;
 
     @SuppressLint("SetJavaScriptEnabled")
     @Override
@@ -51,12 +51,6 @@ public class MainActivity extends AppCompatActivity {
         errorText = findViewById(R.id.errorText);
         retryButton = findViewById(R.id.retryButton);
         configButton = findViewById(R.id.configButton);
-        topConfigButton = findViewById(R.id.topConfigButton);
-        prevPageButton = findViewById(R.id.prevPageButton);
-        nextPageButton = findViewById(R.id.nextPageButton);
-        titleText = findViewById(R.id.titleText);
-
-        titleText.setText(getString(R.string.app_name));
 
         WebSettings settings = webView.getSettings();
         settings.setJavaScriptEnabled(true);
@@ -68,15 +62,45 @@ public class MainActivity extends AppCompatActivity {
         settings.setDisplayZoomControls(false);
         settings.setLoadWithOverviewMode(true);
         settings.setUseWideViewPort(true);
+        settings.setCacheMode(WebSettings.LOAD_NO_CACHE);
 
-        webView.setWebChromeClient(new WebChromeClient());
+        webView.setWebChromeClient(new WebChromeClient() {
+            @Override
+            public boolean onShowFileChooser(
+                WebView webView,
+                ValueCallback<Uri[]> filePathCallback,
+                FileChooserParams fileChooserParams
+            ) {
+                if (MainActivity.this.filePathCallback != null) {
+                    MainActivity.this.filePathCallback.onReceiveValue(null);
+                }
+
+                MainActivity.this.filePathCallback = filePathCallback;
+
+                Intent chooserIntent;
+                try {
+                    chooserIntent = fileChooserParams.createIntent();
+                } catch (Exception exception) {
+                    MainActivity.this.filePathCallback = null;
+                    return false;
+                }
+
+                try {
+                    startActivityForResult(chooserIntent, FILE_CHOOSER_REQUEST_CODE);
+                    return true;
+                } catch (Exception exception) {
+                    if (MainActivity.this.filePathCallback != null) {
+                        MainActivity.this.filePathCallback.onReceiveValue(null);
+                        MainActivity.this.filePathCallback = null;
+                    }
+                    return false;
+                }
+            }
+        });
         webView.setWebViewClient(new RemoteClient());
 
         retryButton.setOnClickListener(v -> loadRemote());
         configButton.setOnClickListener(v -> openConfigDialog());
-        topConfigButton.setOnClickListener(v -> openConfigDialog());
-        prevPageButton.setOnClickListener(v -> triggerPageChange("remotePrevPageBtn"));
-        nextPageButton.setOnClickListener(v -> triggerPageChange("remoteNextPageBtn"));
 
         getOnBackPressedDispatcher().addCallback(this, new OnBackPressedCallback(true) {
             @Override
@@ -90,6 +114,23 @@ public class MainActivity extends AppCompatActivity {
         });
 
         loadRemote();
+    }
+
+    @Override
+    protected void onActivityResult(int requestCode, int resultCode, Intent data) {
+        super.onActivityResult(requestCode, resultCode, data);
+
+        if (requestCode != FILE_CHOOSER_REQUEST_CODE || filePathCallback == null) {
+            return;
+        }
+
+        Uri[] results = null;
+        if (resultCode == Activity.RESULT_OK) {
+            results = WebChromeClient.FileChooserParams.parseResult(resultCode, data);
+        }
+
+        filePathCallback.onReceiveValue(results);
+        filePathCallback = null;
     }
 
     @Override
@@ -118,17 +159,13 @@ public class MainActivity extends AppCompatActivity {
         );
     }
 
-    private void triggerPageChange(String buttonId) {
-        webView.evaluateJavascript(
-            "(() => { const btn = document.querySelector('#" + buttonId + "'); if (btn) { btn.click(); return true; } return false; })();",
-            null
-        );
-    }
-
     private void loadRemote() {
         showError(null);
         webView.setVisibility(View.VISIBLE);
-        webView.loadUrl(getRemoteUrl());
+        webView.clearCache(true);
+        webView.clearHistory();
+        String separator = getRemoteUrl().contains("?") ? "&" : "?";
+        webView.loadUrl(getRemoteUrl() + separator + "ts=" + System.currentTimeMillis());
     }
 
     private String getRemoteUrl() {
